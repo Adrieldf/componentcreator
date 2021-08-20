@@ -7,7 +7,7 @@ export function activate(context: vscode.ExtensionContext) {
   console.log(
     'Congratulations, your extension "componentcreator" is now active!'
   );
-
+  let storageManager = new LocalStorageService(context.workspaceState);
   let disposable = vscode.commands.registerCommand(
     "componentcreator.createComponent",
     async () => {
@@ -16,6 +16,8 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage("editor does not exist");
         return;
       }
+
+      saveComponentFolder();
 
       function lookForFolders(
         currentPath: string,
@@ -39,15 +41,13 @@ export function activate(context: vscode.ExtensionContext) {
         });
       }
 
-      function saveComponentFolder() {
-        let storageManager = new LocalStorageService(context.workspaceState);
+      function saveComponentFolder(force?: boolean) {
+        let componentsFolder =
+          storageManager.getValue<string>("componentsFolder");
 
-        storageManager.setValue<string>("componentsFolder", "");
-
-        let componentsFolder = storageManager.getValue<string>("componentsFolder");
-
-        if(componentsFolder && componentsFolder != "" ){
-          
+        if (componentsFolder && componentsFolder != "" && !force) {
+          selectBaseComponent();
+          return;
         }
         var workspaceFolders = vscode.workspace.workspaceFolders;
         let folderList = Array<string>();
@@ -59,14 +59,15 @@ export function activate(context: vscode.ExtensionContext) {
             projectRoot.substring(projectRoot.lastIndexOf("\\"))
           );
         }
-        var baseComponentName = "";
         const quickPick = vscode.window.createQuickPick();
+        quickPick.title = "Select the components folder";
         if (folderList.length) {
           quickPick.items = folderList.map((label) => ({ label }));
           quickPick.onDidChangeSelection(([item]) => {
             if (item) {
-              baseComponentName = item.label;
+              storageManager.setValue<string>("componentsFolder", item.label);
               quickPick.dispose();
+              selectBaseComponent();
             }
           });
           quickPick.onDidHide(() => quickPick.dispose());
@@ -74,9 +75,88 @@ export function activate(context: vscode.ExtensionContext) {
         }
       }
 
-      //digitar o nome do componente a ser criado
-      //copiar a pasta do componente selecionado e criar nova com o nome escrito
-      //copiar os arquivos de dentro do componente base e criar novos substituindo o nome do antigo pelo novo aonde estiver no titulo e conteudo do arquivo
+      function selectBaseComponent() {
+        var workspaceFolders = vscode.workspace.workspaceFolders;
+        if (workspaceFolders != null && workspaceFolders.length > 0) {
+          const projectRoot = workspaceFolders[0].uri.fsPath;
+          const componentsFolder =
+            storageManager.getValue<string>("componentsFolder");
+
+          let componentsList = Array<string>();
+          let completePath =
+            projectRoot +
+            componentsFolder.substring(componentsFolder.indexOf("\\", 1));
+          let read = fs.readdirSync(completePath, { withFileTypes: true });
+          read.forEach((element) => {
+            if (element.isDirectory()) {
+              componentsList.push(element.name);
+            }
+          });
+
+          const quickPick = vscode.window.createQuickPick();
+          quickPick.title = "Select the component to copy";
+          if (componentsList.length) {
+            quickPick.items = componentsList.map((label) => ({ label }));
+            quickPick.onDidChangeSelection(([item]) => {
+              if (item) {
+                quickPick.dispose();
+                getNewComponentName(item.label, completePath);
+              }
+            });
+            quickPick.onDidHide(() => quickPick.dispose());
+            quickPick.show();
+          }
+        }
+      }
+
+      function getNewComponentName(
+        baseComponentName: string,
+        completePath: string
+      ) {
+        const componentNameInput = vscode.window.createInputBox();
+        componentNameInput.title = "Type the new component name";
+        componentNameInput.onDidAccept(() => {
+          createComponent(
+            baseComponentName,
+            componentNameInput.value,
+            completePath
+          );
+          componentNameInput.hide();
+        });
+        componentNameInput.onDidHide(() => componentNameInput.dispose());
+        componentNameInput.show();
+      }
+
+      function createComponent(
+        baseComponentName: string,
+        newComponentName: string,
+        completePath: string
+      ) {
+        let baseFolderPath = completePath + "\\" + baseComponentName;
+        let newFolderPath = completePath + "\\" + newComponentName;
+        fs.mkdirSync(newFolderPath);
+
+        let read = fs.readdirSync(baseFolderPath, { withFileTypes: true });
+        read.forEach((baseItem) => {
+          let newName =
+            newFolderPath +
+            "\\" +
+            baseItem.name.replace(baseComponentName, newComponentName);
+          fs.copyFileSync(baseFolderPath + "\\" + baseItem.name, newName);
+          fs.readFile(newName, "utf8", function (err, data) {
+            if (err) {
+              return console.log(err);
+            }
+            const replacer = new RegExp(baseComponentName, "g");
+            var result = data.replace(replacer, newComponentName);
+
+            fs.writeFile(newName, result, "utf8", function (err) {
+              if (err) return console.log(err);
+            });
+          });
+        });
+        vscode.window.showInformationMessage("Component created! :D");
+      }
     }
   );
 
